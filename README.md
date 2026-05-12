@@ -444,11 +444,11 @@ Overrides apply at registration time. Useful for per-agent tool namespacing or d
 
 ## How search works
 
-**Hybrid** (default) - runs both semantic and keyword search at 2x requested top_k, normalizes scores, combines with `semantic * 0.7 + keyword * 0.3`. Results appearing in both get a 1.2x boost. Returns top_k from merged set.
+**Hybrid** (default) - runs both semantic and FTS (LanceDB full-text search, BM25-style) at 2x requested top_k, normalizes scores, combines with `semantic * 0.7 + FTS * 0.3`. Results appearing in both get a 1.2x boost. Returns top_k from merged set.
 
 **Semantic** - embeds the query, runs vector similarity search against LanceDB.
 
-**Exact** - scans vault files for literal substring matches. Optional case sensitivity.
+**Exact** - scans raw vault files for literal substring matches. Not index-backed. Optional case sensitivity.
 
 All search modes accept tag and folder pre-filters. Tags use SQL LIKE against comma-separated tag strings in the index. Folders use path prefix matching.
 

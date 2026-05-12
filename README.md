@@ -116,49 +116,307 @@ To use Ollama instead: `docker run ... -e EMBEDDING_PROVIDER=ollama -e OLLAMA_UR
 
 ## Tools (27)
 
-**Search**
-- `search` - hybrid, semantic, or exact mode. Filterable by tags and folder.
+### Search
 
-**Read**
-- `get_note` - single note with parsed frontmatter and tags
-- `list_notes` - paginated listing with index-backed filtering (tags, projects, status, area) and frontmatter property filtering
+#### `search`
 
-**Write**
-- `create_note` - fails if exists
-- `append_to_note` - adds text at end
-- `prepend_to_note` - inserts after frontmatter, before body
-- `update_frontmatter` - merges key-value pairs, preserves unlisted keys
-- `move_note` - move/rename with vault-wide wikilink rewriting
-- `delete_note` - soft delete (.trash) or permanent
+Find notes by text, meaning, or exact string.
 
-**Daily notes**
-- `get_daily_note` - today's or a specific date
-- `create_daily_note` - with optional template, respects Obsidian daily-notes config
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `query` | string | (required) | Search query text |
+| `mode` | string | `"hybrid"` | `hybrid`, `semantic`, or `exact` |
+| `top_k` | int | `10` | Max results to return |
+| `tags` | string[] | `null` | Pre-filter by tags |
+| `folder` | string | `null` | Pre-filter by folder path prefix |
+| `case_sensitive` | bool | `false` | Exact mode only - match case |
 
-**Tags**
-- `get_tags` - all unique tags with counts, sorted
+### Read
 
-**Link graph**
-- `get_backlinks` - notes linking to a given note
-- `get_outlinks` - outgoing wikilinks (valid + broken)
-- `find_orphans` - disconnected notes (no inbound, no outbound, or both)
-- `find_broken_links` - wikilinks pointing at nonexistent notes
-- `get_graph_neighbors` - BFS walk, depth 1-5, direction: inbound/outbound/both
+#### `get_note`
 
-**Canvas**
-- `list_canvases` - all .canvas files, optional folder filter
-- `read_canvas` - node and edge structure of a canvas
-- `create_canvas` - new canvas with optional initial nodes/edges
-- `add_canvas_node` - add text/file/link/group node, grid auto-layout when position omitted
-- `update_canvas_node` - update any property of an existing node by ID
-- `remove_canvas_nodes` - remove nodes by ID, auto-removes dangling edges
-- `add_canvas_edge` - add edge with full property support (side anchors, arrow ends, color, label)
-- `update_canvas_edge` - update edge properties by ID
-- `remove_canvas_edges` - remove edges by ID
+Read a single note with parsed frontmatter and tags.
 
-**Index management**
-- `vault_index_status` - index health and stats
-- `vault_reindex` - incremental reindex for one note or entire vault
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path to the note |
+
+#### `list_notes`
+
+Enumerate vault notes with optional metadata filters. Index-backed fields (tags, projects, status, area) query LanceDB when available. Frontmatter property filtering scans files directly.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `folder` | string | `null` | Filter by folder path prefix |
+| `tags` | string[] | `null` | Filter by tags (index-backed) |
+| `projects` | string[] | `null` | Filter by projects (index-backed) |
+| `status` | string | `null` | Filter by status field (index-backed) |
+| `area` | string | `null` | Filter by area field (index-backed) |
+| `frontmatter_property` | string | `null` | Arbitrary frontmatter key to filter on |
+| `frontmatter_value` | string | `null` | Value to match for `frontmatter_property` (case-insensitive) |
+| `include_content` | bool | `false` | Include note content in results |
+| `limit` | int | `50` | Max results to return |
+
+### Write
+
+#### `create_note`
+
+Create a new note. Fails if it already exists.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path for the new note |
+| `content` | string | (required) | Note body text |
+| `frontmatter` | string | `null` | JSON string of frontmatter fields, e.g. `'{"title":"My Note","tags":["idea"]}'` |
+
+#### `append_to_note`
+
+Append text to the end of an existing note.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path |
+| `content` | string | (required) | Text to append |
+
+#### `prepend_to_note`
+
+Insert text after frontmatter, before the note body.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path |
+| `content` | string | (required) | Text to prepend |
+
+#### `update_frontmatter`
+
+Merge key-value pairs into YAML frontmatter. Unlisted keys preserved.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path |
+| `properties` | string | (required) | JSON string of key-value pairs, e.g. `'{"status":"done","tags":["review"]}'` |
+
+#### `move_note`
+
+Move or rename a note. Rewrites wikilinks vault-wide by default.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `old_path` | string | (required) | Current vault-relative path |
+| `new_path` | string | (required) | Destination vault-relative path |
+| `update_links` | bool | `true` | Rewrite wikilinks in all referencing notes |
+
+#### `delete_note`
+
+Delete a note. Moves to .trash by default; use permanent for hard delete.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path |
+| `permanent` | bool | `false` | `true` for hard delete, `false` for soft delete to .trash |
+
+### Daily notes
+
+#### `get_daily_note`
+
+Read today's or a specific date's daily note. Uses Obsidian's daily-notes config for folder and date format. Returns a text message (not an error) if no note exists for the requested date.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `date` | string | `null` | Date string (e.g. `"2024-03-15"`). Omit for today |
+
+#### `create_daily_note`
+
+Create a daily note for today or a given date. Fails if one exists. Supports `{{date}}` placeholder in templates.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `date` | string | `null` | Date string. Omit for today |
+| `content` | string | `null` | Note body text |
+| `template_path` | string | `null` | Vault-relative path to a template note |
+
+### Tags
+
+#### `get_tags`
+
+List all unique tags in the vault with per-note usage counts.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `sort_by` | string | `"count"` | `count` (descending) or `name` (alphabetical) |
+
+### Link graph
+
+#### `get_backlinks`
+
+Find notes that link to a given note.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path of the target note |
+
+#### `get_outlinks`
+
+List all outgoing wikilinks from a note. Shows valid, broken, and embed links separately.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path |
+
+#### `find_orphans`
+
+Find disconnected notes - no inbound links, no outbound links, or both.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `include_outlinks_check` | bool | `true` | Also report notes with no outgoing links |
+| `max_results` | int | `200` | Cap per category |
+
+#### `find_broken_links`
+
+Find wikilinks pointing at notes that don't exist.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `folder` | string | `null` | Limit scan to a folder |
+| `max_results` | int | `200` | Max broken links to return |
+
+#### `get_graph_neighbors`
+
+Walk the link graph outward from a note via BFS.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Starting note path |
+| `depth` | int | `1` | BFS depth, 1-5 |
+| `direction` | string | `"both"` | `inbound`, `outbound`, or `both` |
+
+### Canvas
+
+#### `list_canvases`
+
+List all .canvas files in the vault.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `folder` | string | `null` | Filter by folder path prefix |
+
+#### `read_canvas`
+
+Read canvas structure (nodes + edges).
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path to .canvas file |
+
+#### `create_canvas`
+
+Create a new .canvas file with optional initial nodes/edges. Fails if it already exists.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | (required) | Vault-relative path for the new canvas |
+| `nodes` | string | `null` | JSON array of node objects, e.g. `'[{"type":"text","text":"Hello"}]'` |
+| `edges` | string | `null` | JSON array of edge objects |
+
+#### `add_canvas_node`
+
+Add a node (text/file/link/group) to a canvas. Position auto-computed via grid layout if omitted.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `canvas_path` | string | (required) | Path to the canvas |
+| `node_type` | string | (required) | `text`, `file`, `link`, or `group` |
+| `text` | string | `null` | Text content (for text nodes) |
+| `file` | string | `null` | Vault-relative file path (for file nodes) |
+| `url` | string | `null` | URL (for link nodes) |
+| `label` | string | `null` | Display label |
+| `x` | int | `null` | X position. Auto-placed if omitted |
+| `y` | int | `null` | Y position. Auto-placed if omitted |
+| `width` | int | `250` | Node width in pixels |
+| `height` | int | `60` | Node height in pixels |
+| `color` | string | `null` | Obsidian preset `"1"`-`"6"` (red, orange, yellow, green, cyan, purple) or hex `"#FF0000"` |
+
+#### `update_canvas_node`
+
+Update any property of an existing canvas node by ID. Only provided fields are changed.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `canvas_path` | string | (required) | Path to the canvas |
+| `node_id` | string | (required) | ID of the node to update |
+| `x` | int | `null` | New X position |
+| `y` | int | `null` | New Y position |
+| `width` | int | `null` | New width |
+| `height` | int | `null` | New height |
+| `color` | string | `null` | Preset `"1"`-`"6"` or hex `"#FF0000"` |
+| `text` | string | `null` | New text content |
+| `file` | string | `null` | New file reference |
+| `url` | string | `null` | New URL |
+| `label` | string | `null` | New label |
+
+#### `remove_canvas_nodes`
+
+Remove nodes by ID. Auto-removes dangling edges.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `canvas_path` | string | (required) | Path to the canvas |
+| `node_ids` | string | (required) | JSON array of node ID strings, e.g. `'["id1","id2"]'` |
+
+#### `add_canvas_edge`
+
+Add an edge between two canvas nodes with full property support.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `canvas_path` | string | (required) | Path to the canvas |
+| `from_node` | string | (required) | Source node ID |
+| `to_node` | string | (required) | Target node ID |
+| `from_side` | string | `null` | Anchor side on source: `top`, `bottom`, `left`, `right` |
+| `to_side` | string | `null` | Anchor side on target |
+| `from_end` | string | `null` | End style on source side (e.g. `arrow`, `none`) |
+| `to_end` | string | `null` | End style on target side |
+| `color` | string | `null` | Preset `"1"`-`"6"` or hex `"#FF0000"` |
+| `label` | string | `null` | Edge label text |
+
+#### `update_canvas_edge`
+
+Update properties of an existing canvas edge by ID. Only provided fields are changed.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `canvas_path` | string | (required) | Path to the canvas |
+| `edge_id` | string | (required) | ID of the edge to update |
+| `from_side` | string | `null` | New source anchor side |
+| `to_side` | string | `null` | New target anchor side |
+| `from_end` | string | `null` | New source end style |
+| `to_end` | string | `null` | New target end style |
+| `color` | string | `null` | Preset `"1"`-`"6"` or hex `"#FF0000"` |
+| `label` | string | `null` | New label |
+
+#### `remove_canvas_edges`
+
+Remove edges from a canvas by ID.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `canvas_path` | string | (required) | Path to the canvas |
+| `edge_ids` | string | (required) | JSON array of edge ID strings |
+
+### Index management
+
+#### `vault_index_status`
+
+Check search index health and statistics. No arguments.
+
+#### `vault_reindex`
+
+Trigger incremental reindex for one note or the entire vault.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `path` | string | `null` | Vault-relative path to reindex a single note. Omit for full vault |
 
 ## MCP resources
 

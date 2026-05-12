@@ -1,6 +1,6 @@
 # some-vault-some-mcp
 
-MCP server that gives AI models read/write access to Obsidian vaults with semantic search, link graph analysis, and incremental indexing.
+MCP server that gives AI models read/write access to Obsidian vaults with semantic search, link graph analysis, canvas manipulation, and incremental indexing.
 
 Built on FastMCP + LanceDB. Embeds notes locally with fastembed (nomic-embed-text-v1.5-Q, 768 dims) by default — no server required. Optionally supports Ollama or OpenAI embeddings. Watches the vault filesystem and re-indexes on change.
 
@@ -14,6 +14,7 @@ Warning: This is a hot vibe coded mess, user beware
 - Note CRUD - create, read, append, prepend, move, delete (soft delete to .trash by default)
 - Frontmatter parsing - YAML extraction, tag collection (frontmatter + inline #hashtags), property filtering
 - Wikilink graph - backlinks, outlinks, orphan detection, broken link detection, BFS neighbor traversal (depth 1-5)
+- Canvas CRUD - create, read, add/update/remove nodes and edges, grid auto-layout, dangling edge cleanup
 - Daily notes - Moment.js-style date formatting, template support, reads Obsidian's daily-notes config
 - Incremental indexing - filesystem watcher with 2s debounce, mtime-based change detection
 - Atomic writes - temp file + POSIX rename, per-path asyncio locks
@@ -113,7 +114,7 @@ Runs as non-root user (vault:vault, UID 1000). Index data persists in `/opt/data
 
 To use Ollama instead: `docker run ... -e EMBEDDING_PROVIDER=ollama -e OLLAMA_URL=http://ollama:11434 some-vault-some-mcp`
 
-## Tools (18)
+## Tools (27)
 
 **Search**
 - `search` - hybrid, semantic, or exact mode. Filterable by tags and folder.
@@ -143,6 +144,17 @@ To use Ollama instead: `docker run ... -e EMBEDDING_PROVIDER=ollama -e OLLAMA_UR
 - `find_orphans` - disconnected notes (no inbound, no outbound, or both)
 - `find_broken_links` - wikilinks pointing at nonexistent notes
 - `get_graph_neighbors` - BFS walk, depth 1-5, direction: inbound/outbound/both
+
+**Canvas**
+- `list_canvases` - all .canvas files, optional folder filter
+- `read_canvas` - node and edge structure of a canvas
+- `create_canvas` - new canvas with optional initial nodes/edges
+- `add_canvas_node` - add text/file/link/group node, grid auto-layout when position omitted
+- `update_canvas_node` - update any property of an existing node by ID
+- `remove_canvas_nodes` - remove nodes by ID, auto-removes dangling edges
+- `add_canvas_edge` - add edge with full property support (side anchors, arrow ends, color, label)
+- `update_canvas_edge` - update edge properties by ID
+- `remove_canvas_edges` - remove edges by ID
 
 **Index management**
 - `vault_index_status` - index health and stats
@@ -213,4 +225,4 @@ uv run pytest
 
 Unit tests cover core logic without external dependencies. Integration tests use MockProvider (deterministic seeded vectors) against real LanceDB. Semantic quality tests use FastEmbedProvider with real embeddings (model downloads to `~/.cache/fastembed/` on first run, ~130MB).
 
-Test fixtures live in `tests/fixtures/vault/` - a minimal vault with frontmatter, wikilinks, nested folders, daily notes, and excluded directories.
+Test fixtures live in `tests/fixtures/vault/` - a minimal vault with frontmatter, wikilinks, nested folders, daily notes, canvas files, and excluded directories.

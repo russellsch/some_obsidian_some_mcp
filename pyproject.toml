@@ -1,0 +1,45 @@
+[project]
+name = "some-vault-some-mcp"
+version = "0.1.0"
+description = "MCP server for Obsidian vaults with vector search"
+requires-python = ">=3.11"
+dependencies = [
+    "fastembed>=0.5.0",
+    "fastmcp>=0.1.0",
+    "lancedb>=0.30.2",
+    "pandas>=2.0.0",
+    "watchdog>=4.0.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+gpu = ["fastembed-gpu>=0.5.0"]
+ollama = ["ollama>=0.3.0"]
+openai = ["openai>=1.0.0"]
+
+[project.scripts]
+some-vault-some-mcp = "some_vault_some_mcp.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/some_vault_some_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: integration tests (may download embedding models on first run)",
+    "e2e: Docker build + MCP client tests (requires Docker daemon)",
+]
+
+[dependency-groups]
+dev = [
+    "mcp>=1.27.1",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=0.23.0",
+    "testcontainers>=4.0",
+]

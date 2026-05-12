@@ -1,0 +1,328 @@
+"""LanceDB indexer — port of willfanguy's indexer.py with improvements.
+
+Schema is preserved exactly (see docs/plans/lancedb-schema-capture.md):
+- 12 columns, 768-dim float32 vectors (Ollama nomic-embed-text default)
+- FTS index on content column
+- tags/projects stored as comma-separated strings (not Arrow lists)
+
+Improvements:
+- SKIP_DIRS reduced to .obsidian, .git, .trash (vault-specific dirs removed)
+- rglob("*.md") only — no SKIP_EXTENSIONS needed
+- Dimension check at startup (§6.4 step 3)
+- Single-file reindex actually limits scope (upstream bug fixed)
+- embed_texts uses list batch input (Ollama supports it)
+"""
+
+import logging
+import os
+import time
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+TABLE_NAME = "vault_chunks"
+EXCLUDED_DIRS = frozenset([".obsidian", ".git", ".trash"])
+BATCH_SIZE = 50
+
+
+def _get_db(db_path: str):
+    import lancedb
+    os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+    return lancedb.connect(db_path)
+
+
+def _get_table(db, table_name: str = TABLE_NAME):
+    if table_name in db.list_tables().tables:
+        return db.open_table(table_name)
+    return None
+
+
+def _check_dimension_mismatch(db, provider_dims: int) -> None:
+    """Check existing table vector dims against provider dims.
+
+    Raises RuntimeError if they differ — prevents silent ArrowInvalid crash.
+    If no table exists, silently passes (will create fresh).
+    """
+    table = _get_table(db)
+    if table is None:
+        return  # No table yet — skip check
+
+    schema = table.schema
+    vector_field = None
+    for field in schema:
+        if field.name == "vector":
+            vector_field = field
+            break
+
+    if vector_field is None:
+        return  # No vector column — unexpected but non-fatal
+
+    import pyarrow as pa
+    vtype = vector_field.type
+    if hasattr(vtype, "list_size"):
+        existing_dims = vtype.list_size
+    elif hasattr(vtype, "value_type"):
+        # FixedSizeList
+        try:
+            existing_dims = pa.types.is_fixed_size_list(vtype) and getattr(vtype, "list_size", None)
+        except Exception:
+            existing_dims = None
+    else:
+        existing_dims = None
+
+    if existing_dims is not None and existing_dims != provider_dims:
+        raise RuntimeError(
+            f"Dimension mismatch: provider produces {provider_dims}-dim vectors "
+            f"but existing index has {existing_dims}-dim vectors. "
+            "Full reindex required — run with --reindex-force or delete the LanceDB directory."
+        )
+
+
+def _rebuild_fts_index(table) -> None:
+    try:
+        table.create_fts_index("content", replace=True)
+        logger.info("FTS index rebuilt on 'content' column")
+    except Exception as e:
+        logger.warning(f"FTS index rebuild failed: {e}")
+
+
+def scan_vault(vault_path: str) -> list[tuple[str, float]]:
+    """Scan vault for .md files, returning [(vault_relative_path, mtime)]."""
+    vault = Path(vault_path)
+    results = []
+    for path in vault.rglob("*.md"):
+        rel = str(path.relative_to(vault)).replace("\\", "/")
+        parts = rel.split("/")
+        if any(seg.lower() in EXCLUDED_DIRS for seg in parts):
+            continue
+        results.append((rel, path.stat().st_mtime))
+    return results
+
+
+def _make_record(chunk: dict, vector: list[float]) -> dict:
+    """Convert a chunk dict + vector to a LanceDB record dict."""
+    tags = chunk.get("tags", [])
+    projects = chunk.get("projects", [])
+    return {
+        "file_path": chunk["file_path"],
+        "chunk_index": chunk["chunk_index"],
+        "heading": chunk["heading"],
+        "content": chunk["content"],
+        "title": chunk.get("title", ""),
+        "tags": ",".join(str(t) for t in tags if t is not None) if isinstance(tags, list) else str(tags or ""),
+        "projects": ",".join(str(p) for p in projects if p is not None) if isinstance(projects, list) else str(projects or ""),
+        "area": str(chunk.get("area") or ""),
+        "status": str(chunk.get("status") or ""),
+        "source": str(chunk.get("source") or ""),
+        "file_mtime": chunk["file_mtime"],
+        "vector": vector,
+    }
+
+
+def full_index(
+    vault_path: str,
+    db_path: str,
+    provider=None,
+    batch_size: int = BATCH_SIZE,
+) -> dict:
+    """Build complete index from scratch."""
+    from some_vault_some_mcp.core.chunker import chunk_markdown
+    if provider is None:
+        from some_vault_some_mcp.core.embeddings import get_provider
+        provider = get_provider()
+
+    start = time.time()
+    db = _get_db(db_path)
+
+    if TABLE_NAME in db.list_tables().tables:
+        db.drop_table(TABLE_NAME)
+
+    files = scan_vault(vault_path)
+    vault = Path(vault_path)
+    logger.info(f"Scanning {len(files)} markdown files for full index...")
+
+    all_chunks: list[dict] = []
+    for rel_path, mtime in files:
+        full_path = vault / rel_path
+        try:
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            logger.warning(f"Could not read {rel_path}: {e}")
+            continue
+        chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
+        for chunk in chunks:
+            chunk["file_mtime"] = mtime
+        all_chunks.extend(chunks)
+
+    if not all_chunks:
+        logger.info("No chunks produced — empty vault or all files empty")
+        return {"files_indexed": 0, "chunks_created": 0, "files_removed": 0,
+                "duration_seconds": round(time.time() - start, 2)}
+
+    logger.info(f"Embedding {len(all_chunks)} chunks in batches of {batch_size}...")
+    all_vectors: list[list[float] | None] = []
+    texts = [c["text_to_embed"] for c in all_chunks]
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        vectors = provider.embed_texts(batch)
+        all_vectors.extend(vectors)
+        logger.info(f"  Embedded {min(i + batch_size, len(texts))}/{len(texts)}")
+
+    records = [_make_record(c, v) for c, v in zip(all_chunks, all_vectors) if v is not None]
+    table = db.create_table(TABLE_NAME, data=records)
+    _rebuild_fts_index(table)
+
+    duration = time.time() - start
+    unique_files = len(set(r["file_path"] for r in records))
+    logger.info(f"Full index: {unique_files} files, {len(records)} chunks in {duration:.1f}s")
+    return {
+        "files_indexed": unique_files,
+        "chunks_created": len(records),
+        "files_removed": 0,
+        "duration_seconds": round(duration, 2),
+    }
+
+
+def incremental_index(
+    vault_path: str,
+    db_path: str,
+    provider=None,
+    batch_size: int = BATCH_SIZE,
+    single_file: str | None = None,
+) -> dict:
+    """Update index with only changed/new/deleted files.
+
+    If single_file is provided, limits scope to just that vault-relative path.
+    This fixes the upstream bug where the path param was ignored.
+    """
+    from some_vault_some_mcp.core.chunker import chunk_markdown
+    if provider is None:
+        from some_vault_some_mcp.core.embeddings import get_provider
+        provider = get_provider()
+
+    start = time.time()
+    db = _get_db(db_path)
+    table = _get_table(db)
+
+    if table is None:
+        return full_index(vault_path, db_path, provider, batch_size)
+
+    # Get current vault state
+    current_files = dict(scan_vault(vault_path))
+
+    # If single_file mode, limit scope
+    if single_file:
+        if single_file in current_files:
+            current_files = {single_file: current_files[single_file]}
+        else:
+            # File deleted — just handle removal
+            current_files = {}
+
+    # Get indexed states
+    import pandas as pd
+    df = table.to_pandas()
+    indexed_mtimes: dict[str, float] = {}
+    for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
+        indexed_mtimes[row["file_path"]] = row["file_mtime"]
+
+    # If single_file, only consider that file in indexed_mtimes
+    if single_file:
+        indexed_mtimes = {k: v for k, v in indexed_mtimes.items() if k == single_file}
+
+    to_reindex = [
+        (rel, mtime) for rel, mtime in current_files.items()
+        if rel not in indexed_mtimes or mtime > indexed_mtimes[rel]
+    ]
+    deleted = set(indexed_mtimes.keys()) - set(current_files.keys())
+
+    if not to_reindex and not deleted:
+        return {
+            "files_indexed": 0, "chunks_created": 0, "files_removed": 0,
+            "duration_seconds": round(time.time() - start, 2),
+        }
+
+    # Remove old chunks for reindexed/deleted files
+    paths_to_remove = {p for p, _ in to_reindex} | deleted
+    if paths_to_remove:
+        from some_vault_some_mcp.core.filters import escape_filter_value
+        filter_expr = " OR ".join(f'file_path = "{escape_filter_value(p)}"' for p in paths_to_remove)
+        table.delete(filter_expr)
+
+    vault = Path(vault_path)
+    new_chunks: list[dict] = []
+    for rel_path, mtime in to_reindex:
+        full_path = vault / rel_path
+        try:
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            logger.warning(f"Could not read {rel_path}: {e}")
+            continue
+        chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
+        for chunk in chunks:
+            chunk["file_mtime"] = mtime
+        new_chunks.extend(chunks)
+
+    if new_chunks:
+        texts = [c["text_to_embed"] for c in new_chunks]
+        all_vectors: list[list[float] | None] = []
+        for i in range(0, len(texts), batch_size):
+            all_vectors.extend(provider.embed_texts(texts[i:i + batch_size]))
+
+        records = [_make_record(c, v) for c, v in zip(new_chunks, all_vectors) if v is not None]
+        table.add(records)
+
+    _rebuild_fts_index(table)
+
+    duration = time.time() - start
+    return {
+        "files_indexed": len(to_reindex),
+        "chunks_created": len(new_chunks),
+        "files_removed": len(deleted),
+        "duration_seconds": round(duration, 2),
+    }
+
+
+def get_index_status(vault_path: str, db_path: str, provider_dims: int | None = None) -> dict:
+    """Return index health information."""
+    db = _get_db(db_path)
+    table = _get_table(db)
+
+    if table is None:
+        return {
+            "total_chunks": 0, "total_files": 0, "pending_reindex": 0,
+            "db_size_mb": 0.0,
+        }
+
+    import pandas as pd
+    df = table.to_pandas()
+    total_chunks = len(df)
+    total_files = df["file_path"].nunique() if not df.empty else 0
+
+    # Pending reindex count
+    pending = 0
+    if vault_path:
+        current_files = dict(scan_vault(vault_path))
+        indexed_mtimes: dict[str, float] = {}
+        for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
+            indexed_mtimes[row["file_path"]] = row["file_mtime"]
+        for rel_path, mtime in current_files.items():
+            if rel_path not in indexed_mtimes or mtime > indexed_mtimes[rel_path]:
+                pending += 1
+
+    # DB size
+    db_size = 0.0
+    if os.path.exists(db_path):
+        for dirpath, _, filenames in os.walk(db_path):
+            for f in filenames:
+                try:
+                    db_size += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+    db_size_mb = round(db_size / (1024 * 1024), 2)
+
+    return {
+        "total_chunks": total_chunks,
+        "total_files": total_files,
+        "pending_reindex": pending,
+        "db_size_mb": db_size_mb,
+    }

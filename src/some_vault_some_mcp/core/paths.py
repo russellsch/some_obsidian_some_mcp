@@ -1,0 +1,120 @@
+"""Vault-boundary path resolver.
+
+All user-supplied paths from MCP tool parameters go through resolve_vault_path()
+before any filesystem operation. The resolver:
+- rejects null bytes
+- rejects path traversal (../)
+- rejects access to .obsidian, .git, .trash at any depth (MCP boundary)
+- resolves symlinks to catch symlink escapes (realpath check)
+
+Internal server code that needs to read .obsidian/ (e.g. daily-notes.json)
+calls resolve_internal() which skips the excluded-dir check.
+"""
+
+import os
+from pathlib import Path
+
+
+EXCLUDED_DIRS = frozenset([".obsidian", ".git", ".trash"])
+
+
+class VaultPathError(Exception):
+    """Raised when a user-supplied path violates vault boundary rules."""
+
+
+def _check_excluded(rel: str) -> None:
+    """Raise VaultPathError if any segment of rel is an excluded dir."""
+    parts = rel.replace("\\", "/").split("/")
+    for seg in parts:
+        if seg.lower() in EXCLUDED_DIRS:
+            raise VaultPathError(f"Access to excluded directory denied: {rel}")
+
+
+def resolve_vault_path(vault_path: str, relative_path: str) -> str:
+    """Resolve a user-supplied relative path to an absolute path within vault.
+
+    Raises VaultPathError on traversal, null bytes, or excluded dir access.
+    Returns the resolved absolute path as str.
+    """
+    if not vault_path:
+        raise VaultPathError("Vault path is not configured")
+    if "\0" in relative_path:
+        raise VaultPathError("Invalid path: contains null byte")
+
+    vault = Path(vault_path).resolve()
+    candidate = (vault / relative_path).resolve()
+
+    # Must start with vault root
+    try:
+        candidate.relative_to(vault)
+    except ValueError:
+        raise VaultPathError("Path traversal detected")
+
+    # Check excluded dirs in the relative portion
+    rel = str(candidate.relative_to(vault))
+    if rel and rel != ".":
+        _check_excluded(rel)
+
+    return str(candidate)
+
+
+def resolve_internal(vault_path: str, relative_path: str) -> str:
+    """Resolve a server-internal path (e.g. .obsidian/daily-notes.json).
+
+    Checks traversal boundary but NOT the excluded-dir list — the server
+    itself must be able to read .obsidian/ config files.
+    """
+    if not vault_path:
+        raise VaultPathError("Vault path is not configured")
+    if "\0" in relative_path:
+        raise VaultPathError("Invalid path: contains null byte")
+
+    vault = Path(vault_path).resolve()
+    candidate = (vault / relative_path).resolve()
+
+    try:
+        candidate.relative_to(vault)
+    except ValueError:
+        raise VaultPathError("Path traversal detected")
+
+    return str(candidate)
+
+
+def walk_vault(vault_path: str) -> list[str]:
+    """Return vault-relative paths of all .md files, excluding EXCLUDED_DIRS."""
+    vault = Path(vault_path)
+    results: list[str] = []
+    for path in vault.rglob("*.md"):
+        rel = str(path.relative_to(vault)).replace("\\", "/")
+        parts = rel.split("/")
+        if any(seg.lower() in EXCLUDED_DIRS for seg in parts):
+            continue
+        results.append(rel)
+    return sorted(results)
+
+
+def ensure_md_extension(path: str) -> str:
+    """Append .md if the path doesn't already end with .md (case-insensitive)."""
+    if not path.lower().endswith(".md"):
+        return path + ".md"
+    return path
+
+
+def ensure_canvas_extension(path: str) -> str:
+    """Append .canvas if the path doesn't already end with .canvas (case-insensitive)."""
+    if not path.lower().endswith(".canvas"):
+        return path + ".canvas"
+    return path
+
+
+def walk_canvas(vault_path: str) -> list[str]:
+    """Return vault-relative paths of all .canvas files, excluding EXCLUDED_DIRS."""
+    vault = Path(vault_path)
+    results: list[str] = []
+    for path in vault.rglob("*.canvas"):
+        rel = str(path.relative_to(vault)).replace("\\", "/")
+        parts = rel.split("/")
+        if any(seg.lower() in EXCLUDED_DIRS for seg in parts):
+            continue
+        results.append(rel)
+    return sorted(results)

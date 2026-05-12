@@ -1,0 +1,110 @@
+"""Config loader for tool overrides and server settings.
+
+Reads some_vault_some_mcp_OVERRIDES env var for the path to the per-agent YAML
+override file. Override file structure:
+
+    tools:
+      <default_tool_name>:
+        name: <custom_name>
+        description: <custom_desc>
+    disabled:
+      - <tool_name>
+
+Override application happens at registration time (not per-call).
+"""
+
+import logging
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolOverride:
+    name: str | None = None
+    description: str | None = None
+
+
+@dataclass
+class VaultMcpConfig:
+    vault_path: str = ""
+    db_path: str = ""
+    transport: str = "sse"
+    host: str = "0.0.0.0"
+    port: int = 3789
+    api_key: str = ""
+    soft_delete_is_permanent: bool = False
+    tool_overrides: dict[str, ToolOverride] = field(default_factory=dict)
+    disabled_tools: set[str] = field(default_factory=set)
+
+
+def load_overrides(override_path: str | None = None) -> tuple[dict[str, ToolOverride], set[str]]:
+    """Load tool overrides from YAML file.
+
+    Returns (overrides_dict, disabled_set). Both empty on missing/empty file.
+    """
+    path = override_path or os.getenv("some_vault_some_mcp_OVERRIDES", "")
+    if not path:
+        return {}, set()
+
+    p = Path(path)
+    if not p.exists():
+        logger.info(f"Override file not found at {path} — using defaults")
+        return {}, set()
+
+    try:
+        raw = p.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw) or {}
+    except Exception as e:
+        logger.warning(f"Failed to parse override file {path}: {e} — using defaults")
+        return {}, set()
+
+    overrides: dict[str, ToolOverride] = {}
+    tools_data = data.get("tools") or {}
+    for default_name, spec in tools_data.items():
+        if not isinstance(spec, dict):
+            continue
+        overrides[str(default_name)] = ToolOverride(
+            name=spec.get("name"),
+            description=spec.get("description"),
+        )
+
+    disabled_raw = data.get("disabled") or []
+    disabled = {str(t) for t in disabled_raw if t}
+
+    return overrides, disabled
+
+
+def load_config() -> VaultMcpConfig:
+    """Build VaultMcpConfig from environment variables."""
+    overrides, disabled = load_overrides()
+    raw = os.getenv("VAULT_SOFT_DELETE_IS_PERMANENT", "").strip().lower()
+    return VaultMcpConfig(
+        vault_path=os.getenv("VAULT_PATH", ""),
+        db_path=os.getenv("LANCE_DB_PATH", "./data/vault.lance"),
+        transport=os.getenv("MCP_TRANSPORT", "sse"),
+        host=os.getenv("MCP_HOST", "0.0.0.0"),
+        port=int(os.getenv("MCP_PORT", "3789")),
+        api_key=os.getenv("VAULT_API_KEY", ""),
+        soft_delete_is_permanent=raw in ("1", "true", "yes"),
+        tool_overrides=overrides,
+        disabled_tools=disabled,
+    )
+
+
+def apply_override(
+    default_name: str,
+    default_desc: str,
+    overrides: dict[str, ToolOverride],
+) -> tuple[str, str]:
+    """Return (name, description) with any override applied."""
+    override = overrides.get(default_name)
+    if override is None:
+        return default_name, default_desc
+    name = override.name if override.name else default_name
+    desc = override.description if override.description else default_desc
+    return name, desc

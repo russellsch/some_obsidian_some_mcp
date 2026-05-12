@@ -1,0 +1,30 @@
+{
+  "table_name": "vault_chunks",
+  "columns": [
+    {"name": "file_path", "type": "string", "nullable": false},
+    {"name": "chunk_index", "type": "int64", "nullable": false},
+    {"name": "heading", "type": "string", "nullable": false},
+    {"name": "content", "type": "string", "nullable": false},
+    {"name": "title", "type": "string", "nullable": false},
+    {"name": "tags", "type": "string", "nullable": false, "note": "comma-separated"},
+    {"name": "projects", "type": "string", "nullable": false, "note": "comma-separated"},
+    {"name": "area", "type": "string", "nullable": false, "note": "empty string when absent"},
+    {"name": "status", "type": "string", "nullable": false, "note": "empty string when absent"},
+    {"name": "source", "type": "string", "nullable": false, "note": "empty string when absent"},
+    {"name": "file_mtime", "type": "double", "nullable": false, "note": "POSIX epoch seconds"},
+    {"name": "vector", "type": "fixed_size_list[float32]", "list_size": 768, "nullable": false}
+  ],
+  "fts_index": {
+    "name": "content_idx",
+    "columns": ["content"],
+    "tokenizer": "simple",
+    "language": "English"
+  },
+  "source": {
+    "package": "willfanguy/obsidian-vault-mcp",
+    "lancedb_version": "0.30.2",
+    "lance_format": "4.0.0",
+    "captured": "2026-05-08",
+    "reference_doc": "docs/plans/lancedb-schema-capture.md"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {"id": "node1aaa00000000", "type": "text", "x": 0, "y": 0, "width": 250, "height": 60, "text": "Hello world"},
+    {"id": "node2bbb00000000", "type": "file", "x": 300, "y": 0, "width": 400, "height": 400, "file": "simple.md"},
+    {"id": "node3ccc00000000", "type": "link", "x": 0, "y": 200, "width": 250, "height": 60, "url": "https://example.com"}
+  ],
+  "edges": [
+    {"id": "edge1aaa00000000", "fromNode": "node1aaa00000000", "toNode": "node2bbb00000000", "fromSide": "right", "toSide": "left", "toEnd": "arrow"}
+  ],
+  "viewport": {"x": 0, "y": 0, "zoom": 1}
+}

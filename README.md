@@ -91,7 +91,7 @@ If running the server separately (Docker, remote, etc), use the SSE URL instead:
 | `MCP_HOST` | `0.0.0.0` | SSE bind address |
 | `MCP_PORT` | `3789` | SSE port |
 | `EMBEDDING_PROVIDER` | `fastembed` | `fastembed`, `ollama`, `openai`, or `mock` |
-| `FASTEMBED_MODEL` | `nomic-ai/nomic-embed-text-v1.5-Q` | Any fastembed-supported model |
+| `FASTEMBED_MODEL` | `nomic-ai/nomic-embed-text-v1.5-Q` | Any fastembed-supported model. On Apple Silicon, auto-detects and uses the non-quantized variant (`v1.5` instead of `v1.5-Q`) since the quantized ONNX ops are x86-optimized |
 | `FASTEMBED_DIMENSIONS` | (auto-detected) | Override dimension auto-detection |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint (requires `--extra ollama`) |
 | `OPENAI_API_KEY` | | Required if provider is `openai` (requires `--extra openai`) |

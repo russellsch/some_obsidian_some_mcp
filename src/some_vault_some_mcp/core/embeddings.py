@@ -11,6 +11,7 @@ embed_query: for search queries
 import hashlib
 import logging
 import os
+import platform
 import random
 from typing import Protocol
 
@@ -154,7 +155,11 @@ class FastEmbedProvider:
     """Embeddings via fastembed (ONNX, local, no server needed)."""
 
     def __init__(self):
-        self.model = os.getenv("FASTEMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5-Q")
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            default_model = "nomic-ai/nomic-embed-text-v1.5"
+        else:
+            default_model = "nomic-ai/nomic-embed-text-v1.5-Q"
+        self.model = os.getenv("FASTEMBED_MODEL", default_model)
         self._embedding = None
         dims_env = os.getenv("FASTEMBED_DIMENSIONS")
         if dims_env:

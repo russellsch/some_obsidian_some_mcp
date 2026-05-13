@@ -41,6 +41,7 @@ jobs:
         run: uv build
 
       - name: Check version not already on PyPI
+        if: github.event_name == 'pull_request'
         run: |
           PKG_NAME="$(python3 -c "
           import re, pathlib

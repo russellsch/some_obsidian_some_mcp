@@ -91,22 +91,34 @@ def serve(args) -> None:
         logger.error(str(e))
         sys.exit(1)
 
-    # Step 4: initial index
+    # Step 4: initial index + watcher
+    from some_vault_some_mcp.server import IndexGate
+    import threading
+
+    gate = IndexGate()
     table = _get_table(db)
     if table is None or table.count_rows() == 0:
-        logger.info("No index found — running full_index (may take several minutes)...")
-        result = full_index(config.vault_path, config.db_path, provider)
-        logger.info(f"Full index complete: {result}")
+        def _background_index():
+            try:
+                logger.info("Background full_index started (server is accepting connections)...")
+                result = full_index(config.vault_path, config.db_path, provider)
+                logger.info(f"Full index complete: {result}")
+                start_watcher(config.vault_path, config.db_path, provider)
+                gate.set_ready()
+            except Exception as e:
+                logger.error(f"Background indexing failed: {e}")
+                gate.set_failed(str(e))
+
+        threading.Thread(target=_background_index, daemon=True, name="background-indexer").start()
     else:
         logger.info("Running incremental_index on startup...")
         result = incremental_index(config.vault_path, config.db_path, provider)
         logger.info(f"Incremental index complete: {result}")
+        start_watcher(config.vault_path, config.db_path, provider)
+        gate.set_ready()
 
-    # Step 5: start watcher
-    start_watcher(config.vault_path, config.db_path, provider)
-
-    # Step 6: build and run server
-    mcp = build_server(config, provider)
+    # Step 5: build and run server
+    mcp = build_server(config, provider, gate)
 
     if config.transport == "stdio":
         mcp.run(transport="stdio")

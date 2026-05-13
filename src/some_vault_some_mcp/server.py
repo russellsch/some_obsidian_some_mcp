@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -13,7 +14,51 @@ from some_vault_some_mcp.core.embeddings import EmbeddingProvider
 logger = logging.getLogger(__name__)
 
 
-def build_server(config: VaultMcpConfig, provider: EmbeddingProvider) -> FastMCP:
+class IndexGate:
+    """Signals whether the search index is ready for queries.
+
+    Written once from the background indexing thread; read from tool handlers.
+    """
+
+    def __init__(self):
+        self._ready = threading.Event()
+        self._error: str | None = None
+
+    @property
+    def is_ready(self) -> bool:
+        return self._ready.is_set() and self._error is None
+
+    @property
+    def error(self) -> str | None:
+        return self._error
+
+    def set_ready(self):
+        self._ready.set()
+
+    def set_failed(self, error: str):
+        self._error = error
+        self._ready.set()
+
+
+def _check_index_gate(gate: "IndexGate | None", tool_name: str) -> str | None:
+    """Return an error message if the index is unavailable, else None."""
+    if gate is None or gate.is_ready:
+        return None
+    if gate.error:
+        return (
+            f"Tool '{tool_name}' is unavailable: initial indexing failed.\n"
+            f"Error: {gate.error}\n"
+            f"Restart the server to retry."
+        )
+    return (
+        f"Tool '{tool_name}' is unavailable: the search index is being built.\n"
+        f"You can use: get_note, search (with mode='exact'), get_tags, "
+        f"get_backlinks, get_outlinks, and all write/canvas tools.\n"
+        f"Call vault_index_status to check progress."
+    )
+
+
+def build_server(config: VaultMcpConfig, provider: EmbeddingProvider, gate: IndexGate | None = None) -> FastMCP:
     """Create and configure the FastMCP server with all tools registered."""
     mcp = FastMCP("some-vault-some-mcp")
 
@@ -44,6 +89,10 @@ def build_server(config: VaultMcpConfig, provider: EmbeddingProvider) -> FastMCP
         mode: hybrid (default), semantic, or exact.
         """
         from some_vault_some_mcp.tools.search import hybrid_search, semantic_search, exact_search
+        if mode in ("hybrid", "semantic"):
+            gate_msg = _check_index_gate(gate, "search")
+            if gate_msg:
+                return gate_msg + "\nYou can call this tool with mode='exact' to search without the index."
         if mode == "semantic":
             try:
                 results = semantic_search(query, db_path, provider, top_k, tags, folder)
@@ -125,6 +174,10 @@ def build_server(config: VaultMcpConfig, provider: EmbeddingProvider) -> FastMCP
         limit: int = 50,
     ):
         """Enumerate vault notes with optional metadata filters."""
+        if tags or projects or status or area:
+            gate_msg = _check_index_gate(gate, "list_notes")
+            if gate_msg:
+                return gate_msg + "\nFiltering by tags/projects/status/area requires the index. Use list_notes with a folder filter or get_tags instead."
         from some_vault_some_mcp.tools.read import list_notes as _list_notes
         results, total = _list_notes(
             vault_path, db_path, folder, tags, projects, status, area,
@@ -411,8 +464,12 @@ def build_server(config: VaultMcpConfig, provider: EmbeddingProvider) -> FastMCP
         """Check search index health."""
         from some_vault_some_mcp.tools.index import vault_index_status as _status
         status = _status(vault_path, db_path, provider.dimensions)
+        index_state = "READY"
+        if gate is not None and not gate.is_ready:
+            index_state = "FAILED: " + (gate.error or "unknown error") if gate.error else "INDEXING"
         return (
             f"Vault Index Status:\n"
+            f"  Status: {index_state}\n"
             f"  Files indexed: {status.total_files}\n"
             f"  Total chunks: {status.total_chunks}\n"
             f"  Pending reindex: {status.pending_reindex}\n"
@@ -423,6 +480,14 @@ def build_server(config: VaultMcpConfig, provider: EmbeddingProvider) -> FastMCP
 
     async def vault_reindex(path: str | None = None):
         """Trigger incremental reindex (single file or full vault)."""
+        if gate is not None and not gate.is_ready:
+            if gate.error:
+                return (
+                    f"vault_reindex is unavailable: initial indexing failed.\n"
+                    f"Error: {gate.error}\n"
+                    f"Restart the server to retry."
+                )
+            return "vault_reindex is unavailable: the initial index is already being built."
         from some_vault_some_mcp.tools.index import vault_reindex as _reindex
         result = _reindex(vault_path, db_path, provider, single_file=path)
         return (

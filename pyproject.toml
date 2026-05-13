@@ -2,6 +2,7 @@
 name = "some-vault-some-mcp"
 version = "0.0.2"
 description = "MCP server for Obsidian vaults with vector search"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "fastembed>=0.5.0",

@@ -23,42 +23,18 @@ Warning: This is a hot vibe coded mess, user beware
 ## Requirements
 
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (for `uvx`)
 
-## Install
+## Quick start
 
-```bash
-uv sync --no-dev                  # default (fastembed CPU)
-uv sync --no-dev --extra gpu      # GPU-accelerated embeddings
-uv sync --no-dev --extra ollama   # if you prefer Ollama
-uv sync --no-dev --extra openai   # if you prefer OpenAI
-```
-
-## Run
-
-```bash
-VAULT_PATH=/path/to/vault some-vault-some-mcp serve
-```
-
-First run does a full index of the vault - takes a few minutes depending on size. Subsequent starts run incremental index only.
-
-### CLI flags
-
-```
-some-vault-some-mcp serve [--transport sse|stdio] [--host 0.0.0.0] [--port 3789]
-```
-
-CLI flags override env vars.
-
-## MCP client config
-
-For Cursor, Windsurf, Claude Code, or any MCP client that spawns the server as a subprocess:
+Add this to your MCP client config (Cursor, Windsurf, Claude Code, etc.):
 
 ```json
 {
   "mcpServers": {
     "obsidian-vault": {
-      "command": "uv",
-      "args": ["run", "--project", "/path/to/some_obsidian_some_mcp", "some-vault-some-mcp", "serve", "--transport", "stdio"],
+      "command": "uvx",
+      "args": ["some-vault-some-mcp", "serve", "--transport", "stdio"],
       "env": {
         "VAULT_PATH": "/path/to/your/obsidian/vault"
       }
@@ -67,7 +43,25 @@ For Cursor, Windsurf, Claude Code, or any MCP client that spawns the server as a
 }
 ```
 
-If running the server separately (Docker, remote, etc), use the SSE URL instead:
+That's it. `uvx` installs the package from PyPI on first run and keeps it cached.
+
+For alternative embedding providers, add `--from` with extras:
+
+```json
+{
+  "command": "uvx",
+  "args": ["--from", "some-vault-some-mcp[ollama]", "some-vault-some-mcp", "serve", "--transport", "stdio"],
+  "env": {
+    "VAULT_PATH": "/path/to/your/obsidian/vault"
+  }
+}
+```
+
+Replace `[ollama]` with `[openai]` or `[gpu]` as needed.
+
+### SSE mode
+
+If running the server separately (Docker, remote, etc.), use the SSE URL instead:
 
 ```json
 {
@@ -79,7 +73,21 @@ If running the server separately (Docker, remote, etc), use the SSE URL instead:
 }
 ```
 
-`--project` tells uv where to find the pyproject.toml. Without it, `uv run` only works if cwd is this repo.
+### Running directly
+
+```bash
+VAULT_PATH=/path/to/vault uvx some-vault-some-mcp serve
+```
+
+First run does a full index of the vault - takes a few minutes depending on size. Subsequent starts run incremental index only.
+
+### CLI flags
+
+```
+some-vault-some-mcp serve [--transport sse|stdio] [--host 0.0.0.0] [--port 3789]
+```
+
+CLI flags override env vars.
 
 ## Environment variables
 
@@ -474,13 +482,51 @@ First matching step wins.
 - Docker container runs as non-root
 - Bounded frontmatter parsing prevents YAML bombs
 
-## Tests
+## Developing
+
+### Setup
 
 ```bash
-uv sync
-uv run pytest
+git clone https://github.com/russellsch/some_obsidian_some_mcp.git
+cd some_obsidian_some_mcp
+uv sync                           # default (fastembed CPU)
+uv sync --extra gpu               # GPU-accelerated embeddings
+uv sync --extra ollama            # Ollama provider
+uv sync --extra openai            # OpenAI provider
 ```
 
-Unit tests cover core logic without external dependencies. Integration tests use MockProvider (deterministic seeded vectors) against real LanceDB. Semantic quality tests use FastEmbedProvider with real embeddings (model downloads to `~/.cache/fastembed/` on first run, ~130MB).
+### Running from source
 
-Test fixtures live in `tests/fixtures/vault/` - a minimal vault with frontmatter, wikilinks, nested folders, daily notes, canvas files, and excluded directories.
+```bash
+VAULT_PATH=/path/to/vault uv run some-vault-some-mcp serve
+```
+
+To use a local checkout in your MCP client config instead of the PyPI package:
+
+```json
+{
+  "mcpServers": {
+    "obsidian-vault": {
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/some_obsidian_some_mcp", "some-vault-some-mcp", "serve", "--transport", "stdio"],
+      "env": {
+        "VAULT_PATH": "/path/to/your/obsidian/vault"
+      }
+    }
+  }
+}
+```
+
+### Tests
+
+```bash
+uv run pytest tests/unit           # unit tests (fast, no external deps)
+uv run pytest tests/integration    # integration tests (real LanceDB, may download ~130MB model)
+uv run pytest                      # everything
+```
+
+Test fixtures live in `tests/fixtures/vault/`.
+
+### Releasing
+
+See [RELEASING.md](RELEASING.md).

@@ -91,9 +91,9 @@ def test_disabled_tool_excluded(tmp_path):
 
 
 def test_tool_count_with_no_overrides(tmp_path):
-    """19 tools registered by default (full suite per §6.2.4)."""
+    """28 tools registered by default (19 original + 9 canvas tools)."""
     from some_vault_some_mcp.server import build_server
     cfg = _make_config(vault_path=str(tmp_path), db_path=str(tmp_path / "db.lance"))
     provider = MockProvider()
     mcp = build_server(cfg, provider)
-    assert _tool_count(mcp) == 19
+    assert _tool_count(mcp) == 28

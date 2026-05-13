@@ -15,6 +15,7 @@ Improvements:
 
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 TABLE_NAME = "vault_chunks"
 EXCLUDED_DIRS = frozenset([".obsidian", ".git", ".trash"])
 BATCH_SIZE = 50
+
+_reindex_lock = threading.Lock()
 
 
 def _get_db(db_path: str):
@@ -207,79 +210,80 @@ def incremental_index(
     if table is None:
         return full_index(vault_path, db_path, provider, batch_size)
 
-    # Get current vault state
-    current_files = dict(scan_vault(vault_path))
+    with _reindex_lock:
+        # Get current vault state
+        current_files = dict(scan_vault(vault_path))
 
-    # If single_file mode, limit scope
-    if single_file:
-        if single_file in current_files:
-            current_files = {single_file: current_files[single_file]}
-        else:
-            # File deleted — just handle removal
-            current_files = {}
+        # If single_file mode, limit scope
+        if single_file:
+            if single_file in current_files:
+                current_files = {single_file: current_files[single_file]}
+            else:
+                # File deleted — just handle removal
+                current_files = {}
 
-    # Get indexed states
-    import pandas as pd
-    df = table.to_pandas()
-    indexed_mtimes: dict[str, float] = {}
-    for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
-        indexed_mtimes[row["file_path"]] = row["file_mtime"]
+        # Get indexed states
+        import pandas as pd
+        df = table.to_pandas()
+        indexed_mtimes: dict[str, float] = {}
+        for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
+            indexed_mtimes[row["file_path"]] = row["file_mtime"]
 
-    # If single_file, only consider that file in indexed_mtimes
-    if single_file:
-        indexed_mtimes = {k: v for k, v in indexed_mtimes.items() if k == single_file}
+        # If single_file, only consider that file in indexed_mtimes
+        if single_file:
+            indexed_mtimes = {k: v for k, v in indexed_mtimes.items() if k == single_file}
 
-    to_reindex = [
-        (rel, mtime) for rel, mtime in current_files.items()
-        if rel not in indexed_mtimes or mtime > indexed_mtimes[rel]
-    ]
-    deleted = set(indexed_mtimes.keys()) - set(current_files.keys())
+        to_reindex = [
+            (rel, mtime) for rel, mtime in current_files.items()
+            if rel not in indexed_mtimes or mtime > indexed_mtimes[rel]
+        ]
+        deleted = set(indexed_mtimes.keys()) - set(current_files.keys())
 
-    if not to_reindex and not deleted:
+        if not to_reindex and not deleted:
+            return {
+                "files_indexed": 0, "chunks_created": 0, "files_removed": 0,
+                "duration_seconds": round(time.time() - start, 2),
+            }
+
+        # Remove old chunks for reindexed/deleted files
+        paths_to_remove = {p for p, _ in to_reindex} | deleted
+        if paths_to_remove:
+            from some_vault_some_mcp.core.filters import escape_filter_value
+            filter_expr = " OR ".join(f'file_path = "{escape_filter_value(p)}"' for p in paths_to_remove)
+            table.delete(filter_expr)
+
+        vault = Path(vault_path)
+        new_chunks: list[dict] = []
+        for rel_path, mtime in to_reindex:
+            full_path = vault / rel_path
+            try:
+                content = full_path.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                logger.warning(f"Could not read {rel_path}: {e}")
+                continue
+            chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
+            for chunk in chunks:
+                chunk["file_mtime"] = mtime
+            new_chunks.extend(chunks)
+
+        if new_chunks:
+            texts = [c["text_to_embed"] for c in new_chunks]
+            all_vectors: list[list[float] | None] = []
+            for i in range(0, len(texts), batch_size):
+                all_vectors.extend(provider.embed_texts(texts[i:i + batch_size]))
+
+            records = [_make_record(c, v) for c, v in zip(new_chunks, all_vectors) if v is not None]
+            table.add(records)
+
+        _rebuild_fts_index(table)
+
+        duration = time.time() - start
         return {
-            "files_indexed": 0, "chunks_created": 0, "files_removed": 0,
-            "duration_seconds": round(time.time() - start, 2),
+            "files_indexed": len(to_reindex),
+            "chunks_created": len(new_chunks),
+            "files_removed": len(deleted),
+            "duration_seconds": round(duration, 2),
         }
-
-    # Remove old chunks for reindexed/deleted files
-    paths_to_remove = {p for p, _ in to_reindex} | deleted
-    if paths_to_remove:
-        from some_vault_some_mcp.core.filters import escape_filter_value
-        filter_expr = " OR ".join(f'file_path = "{escape_filter_value(p)}"' for p in paths_to_remove)
-        table.delete(filter_expr)
-
-    vault = Path(vault_path)
-    new_chunks: list[dict] = []
-    for rel_path, mtime in to_reindex:
-        full_path = vault / rel_path
-        try:
-            content = full_path.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
-            logger.warning(f"Could not read {rel_path}: {e}")
-            continue
-        chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
-        for chunk in chunks:
-            chunk["file_mtime"] = mtime
-        new_chunks.extend(chunks)
-
-    if new_chunks:
-        texts = [c["text_to_embed"] for c in new_chunks]
-        all_vectors: list[list[float] | None] = []
-        for i in range(0, len(texts), batch_size):
-            all_vectors.extend(provider.embed_texts(texts[i:i + batch_size]))
-
-        records = [_make_record(c, v) for c, v in zip(new_chunks, all_vectors) if v is not None]
-        table.add(records)
-
-    _rebuild_fts_index(table)
-
-    duration = time.time() - start
-    return {
-        "files_indexed": len(to_reindex),
-        "chunks_created": len(new_chunks),
-        "files_removed": len(deleted),
-        "duration_seconds": round(duration, 2),
-    }
 
 
 def get_index_status(vault_path: str, db_path: str, provider_dims: int | None = None) -> dict:

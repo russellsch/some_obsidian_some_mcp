@@ -131,15 +131,65 @@ def _split_by_headings(body: str) -> list[tuple[str | None, str]]:
     return sections
 
 
-def _split_section(text: str) -> list[str]:
+def _split_paragraph(text: str, target_size: int) -> list[str]:
+    """Split an oversized paragraph into sub-chunks.
+
+    Tries sentence boundaries first, falls back to character windows.
+    """
+    if len(text) <= target_size:
+        return [text]
+
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    if len(sentences) > 1:
+        groups: list[str] = []
+        current_parts: list[str] = []
+        current_len = 0
+        for sentence in sentences:
+            if current_len + len(sentence) > target_size and current_parts:
+                groups.append(" ".join(current_parts))
+                current_parts = [sentence]
+                current_len = len(sentence)
+            else:
+                current_parts.append(sentence)
+                current_len += len(sentence) + 1
+        if current_parts:
+            groups.append(" ".join(current_parts))
+        if all(len(g) <= target_size * 1.5 for g in groups):
+            return groups
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + target_size, len(text))
+        if end < len(text):
+            word_break = text.rfind(" ", max(start, end - 200), end)
+            if word_break > start:
+                end = word_break
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = end - OVERLAP_SIZE if end < len(text) else end
+    return chunks
+
+
+def _split_section(text: str, target_size: int = TARGET_CHUNK_SIZE) -> list[str]:
     """Split a large section by paragraphs with OVERLAP_SIZE overlap."""
     paragraphs = re.split(r"\n\s*\n", text)
+
+    expanded: list[str] = []
+    for para in paragraphs:
+        if len(para) > target_size:
+            expanded.extend(_split_paragraph(para, target_size))
+        else:
+            expanded.append(para)
+    paragraphs = expanded
+
     groups: list[list[str]] = []
     current: list[str] = []
     current_len = 0
 
     for para in paragraphs:
-        if current_len + len(para) > TARGET_CHUNK_SIZE and current:
+        if current_len + len(para) > target_size and current:
             groups.append(current)
             current = [para]
             current_len = len(para)
@@ -162,7 +212,7 @@ def _split_section(text: str) -> list[str]:
             overlap_paras = []
             overlap_len = 0
             for para in reversed(prev):
-                if overlap_paras and overlap_len + len(para) > OVERLAP_SIZE:
+                if overlap_len + len(para) > OVERLAP_SIZE:
                     break
                 overlap_paras.insert(0, para)
                 overlap_len += len(para) + 2
@@ -226,7 +276,10 @@ def chunk_markdown(file_path: str, content: str, file_mtime: float | None = None
     for heading, section_text in sections:
         if not section_text.strip():
             continue
-        if len(section_text) <= TARGET_CHUNK_SIZE:
+        header = _build_metadata_header(fields, heading)
+        header_len = len(header) + 2 if header else 0
+        effective_budget = max(TARGET_CHUNK_SIZE - header_len, TARGET_CHUNK_SIZE // 2)
+        if len(section_text) <= effective_budget:
             chunks.append(_make_chunk(
                 file_path=file_path,
                 chunk_index=len(chunks),
@@ -235,7 +288,7 @@ def chunk_markdown(file_path: str, content: str, file_mtime: float | None = None
                 metadata=fields,
             ))
         else:
-            for sub in _split_section(section_text):
+            for sub in _split_section(section_text, target_size=effective_budget):
                 if sub.strip():
                     chunks.append(_make_chunk(
                         file_path=file_path,

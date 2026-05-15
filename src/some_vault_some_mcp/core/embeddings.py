@@ -40,6 +40,7 @@ class OllamaProvider:
 
     model = "nomic-embed-text"
     dimensions = 768
+    _max_chars = 8192 * 4  # ~8k tokens at ~4 chars/token
 
     def __init__(self, url: str | None = None):
         self._url = url or os.getenv("OLLAMA_URL", "http://localhost:11434")
@@ -48,13 +49,19 @@ class OllamaProvider:
         import ollama
         return ollama.Client(host=self._url)
 
+    def _truncate(self, text: str) -> str:
+        if len(text) > self._max_chars:
+            logger.warning(f"Truncating text from {len(text)} to {self._max_chars} chars for Ollama embedding")
+            return text[:self._max_chars]
+        return text
+
     def embed_texts(self, texts: list[str]) -> list[list[float] | None]:
         """Embed document chunks. Returns None for failed items (preserves alignment)."""
         if not texts:
             return []
         client = self._client()
         # Add document prefix for nomic-embed-text
-        prefixed = [f"search_document: {t}" for t in texts]
+        prefixed = [f"search_document: {self._truncate(t)}" for t in texts]
         try:
             response = client.embed(model=self.model, input=prefixed)
             embs = response.get("embeddings") or response.get("embedding") or []
@@ -83,7 +90,7 @@ class OllamaProvider:
     def embed_query(self, text: str) -> list[float]:
         """Embed a search query with query prefix."""
         client = self._client()
-        prefixed = f"search_query: {text}"
+        prefixed = f"search_query: {self._truncate(text)}"
         resp = client.embed(model=self.model, input=prefixed)
         embs = resp.get("embeddings") or resp.get("embedding") or []
         if embs and isinstance(embs[0], list):

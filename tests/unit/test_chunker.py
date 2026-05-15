@@ -2,7 +2,10 @@
 
 import pytest
 
-from some_vault_some_mcp.core.chunker import chunk_markdown, _split_by_headings
+from some_vault_some_mcp.core.chunker import (
+    chunk_markdown, _split_by_headings, _split_section, _split_paragraph,
+    _build_metadata_header, TARGET_CHUNK_SIZE, OVERLAP_SIZE,
+)
 
 
 def test_basic_chunk():
@@ -128,3 +131,90 @@ def test_html_stripped():
     chunks = chunk_markdown("html.md", content)
     assert "<b>" not in chunks[0]["content"]
     assert "Bold" in chunks[0]["content"]
+
+
+# --- Fix 1: paragraph sub-splitter ---
+
+def test_split_paragraph_by_sentences():
+    text = ". ".join(f"Sentence number {i} with some padding words" for i in range(80))
+    assert len(text) > TARGET_CHUNK_SIZE
+    parts = _split_paragraph(text, TARGET_CHUNK_SIZE)
+    assert len(parts) > 1
+    for part in parts:
+        assert len(part) <= TARGET_CHUNK_SIZE
+
+
+def test_split_paragraph_no_sentences():
+    text = "x" * 5000
+    parts = _split_paragraph(text, TARGET_CHUNK_SIZE)
+    assert len(parts) > 1
+    for part in parts:
+        assert len(part) <= TARGET_CHUNK_SIZE
+
+
+def test_split_paragraph_passthrough():
+    text = "Short paragraph."
+    assert _split_paragraph(text, TARGET_CHUNK_SIZE) == [text]
+
+
+def test_oversized_single_paragraph_in_section():
+    para = "word " * 1000  # ~5000 chars, single paragraph (no blank lines)
+    content = f"---\ntitle: T\n---\n\n# H\n\n{para}"
+    chunks = chunk_markdown("big.md", content, file_mtime=0.0)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert len(c["text_to_embed"]) <= TARGET_CHUNK_SIZE
+
+
+# --- Fix 2: overlap bounded ---
+
+def test_overlap_bounded():
+    big_para = "A" * 1500
+    small_para = "B" * 100
+    text = f"{big_para}\n\n{small_para}\n\n{small_para}"
+    parts = _split_section(text, target_size=TARGET_CHUNK_SIZE)
+    for part in parts:
+        assert big_para not in part or part == parts[0]
+
+
+def test_overlap_small_paragraphs():
+    paras = [f"Para {i}. " + "x" * 80 for i in range(30)]
+    text = "\n\n".join(paras)
+    parts = _split_section(text, target_size=TARGET_CHUNK_SIZE)
+    assert len(parts) > 1
+    for i in range(1, len(parts)):
+        overlap = set(parts[i - 1].split("\n\n")) & set(parts[i].split("\n\n"))
+        assert len(overlap) > 0
+
+
+# --- Fix 3: header counted in budget ---
+
+def test_header_counted_in_budget():
+    tags = [f"tag{i}" for i in range(20)]
+    tags_yaml = "\n".join(f"  - {t}" for t in tags)
+    section_text = "w" * 1900
+    content = (
+        f"---\ntitle: A Very Long Title For Testing Purposes\n"
+        f"tags:\n{tags_yaml}\n"
+        f"projects:\n  - proj1\n  - proj2\n"
+        f"area: '[[SomeArea]]'\nsource: '[[SomeSource]]'\n---\n\n"
+        f"# Section\n\n{section_text}"
+    )
+    chunks = chunk_markdown("hdr.md", content, file_mtime=0.0)
+    for c in chunks:
+        assert len(c["text_to_embed"]) <= TARGET_CHUNK_SIZE
+
+
+def test_text_to_embed_bounded():
+    for size in [1800, 1900, 1950, 2000, 2500, 5000]:
+        body = "w" * size
+        content = (
+            "---\ntitle: Note\ntags:\n  - a\n  - b\n  - c\n"
+            "projects:\n  - p1\narea: Area\nsource: Source\n---\n\n"
+            f"# Heading\n\n{body}"
+        )
+        chunks = chunk_markdown("bounded.md", content, file_mtime=0.0)
+        for c in chunks:
+            assert len(c["text_to_embed"]) <= TARGET_CHUNK_SIZE, (
+                f"text_to_embed is {len(c['text_to_embed'])} chars for input size {size}"
+            )

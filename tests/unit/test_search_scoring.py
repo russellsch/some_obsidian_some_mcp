@@ -10,7 +10,7 @@ def _score(sem: float, kw: float) -> float:
     combined = sem * _SEMANTIC_WEIGHT + kw * _KW_WEIGHT
     if sem > 0 and kw > 0:
         combined *= _BOOST_FACTOR
-    return combined
+    return min(combined, 1.0)
 
 
 def test_semantic_only():
@@ -32,13 +32,19 @@ def test_both_gets_boost():
 
 def test_weights_sum_to_one_without_boost():
     s = _score(1.0, 1.0)
-    # With boost: (1.0*0.7 + 1.0*0.3) * 1.2 = 1.0 * 1.2 = 1.2
-    assert abs(s - 1.2) < 1e-9
+    # Boost applied but clamped to 1.0
+    assert abs(s - 1.0) < 1e-9
 
 
 def test_full_semantic_no_kw_no_boost():
     s = _score(1.0, 0.0)
     assert abs(s - 0.7) < 1e-9
+
+
+def test_score_never_exceeds_one():
+    """Even with boost, score should be clamped to 1.0."""
+    s = _score(1.0, 1.0)
+    assert s <= 1.0
 
 
 def test_zero_scores():

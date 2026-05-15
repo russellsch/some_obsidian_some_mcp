@@ -138,6 +138,7 @@ def hybrid_search(
         combined = data["sem_score"] * _SEMANTIC_WEIGHT + data["kw_score"] * _KW_WEIGHT
         if data["sem_score"] > 0 and data["kw_score"] > 0:
             combined *= _BOOST_FACTOR
+        combined = min(combined, 1.0)
         ranked.append((combined, data["row"]))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
@@ -171,7 +172,7 @@ def exact_search(
 
     all_files = walk_vault(vault_path)
     if folder:
-        all_files = [f for f in all_files if f.startswith(folder)]
+        all_files = [f for f in all_files if f.startswith(folder.rstrip("/") + "/")]
 
     search_str = query if case_sensitive else query.lower()
     results: list[TextSearchResult] = []

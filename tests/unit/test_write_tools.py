@@ -211,6 +211,19 @@ async def test_move_note_update_links(vault):
 
 
 @pytest.mark.asyncio
+async def test_move_note_rewrites_case_insensitive_links(vault):
+    """Links with different casing than the filename should still be rewritten."""
+    await create_note(vault, "MyNote.md", "Target note content.")
+    await create_note(vault, "ref.md", "See [[mynote]] for info.")
+
+    result = await move_note(vault, "MyNote.md", "renamed.md", update_links=True)
+
+    ref_content = (Path(vault) / "ref.md").read_text(encoding="utf-8")
+    assert "[[renamed]]" in ref_content
+    assert "ref.md" in result["updated_referrers"]
+
+
+@pytest.mark.asyncio
 async def test_move_note_missing_source_fails(vault):
     with pytest.raises(FileNotFoundError):
         await move_note(vault, "phantom.md", "dest.md")

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from some_vault_some_mcp.core.atomic_write import atomic_write, with_file_lock
@@ -188,12 +189,16 @@ async def move_note(
             new_no_ext = resolved_new[:-3] if resolved_new.lower().endswith(".md") else resolved_new
 
             new_content = content
-            # Replace path-form links first, then basename-form
-            new_content = new_content.replace(f"[[{old_no_ext}]]", f"[[{new_no_ext}]]")
-            new_content = new_content.replace(f"[[{old_no_ext}|", f"[[{new_no_ext}|")
+            # Replace path-form links first, then basename-form (case-insensitive)
+            new_content = re.sub(re.escape(f"[[{old_no_ext}]]"), f"[[{new_no_ext}]]",
+                                 new_content, flags=re.IGNORECASE)
+            new_content = re.sub(re.escape(f"[[{old_no_ext}|"), f"[[{new_no_ext}|",
+                                 new_content, flags=re.IGNORECASE)
             if old_stem != new_stem:
-                new_content = new_content.replace(f"[[{old_stem}]]", f"[[{new_stem}]]")
-                new_content = new_content.replace(f"[[{old_stem}|", f"[[{new_stem}|")
+                new_content = re.sub(re.escape(f"[[{old_stem}]]"), f"[[{new_stem}]]",
+                                     new_content, flags=re.IGNORECASE)
+                new_content = re.sub(re.escape(f"[[{old_stem}|"), f"[[{new_stem}|",
+                                     new_content, flags=re.IGNORECASE)
 
             if new_content != content:
                 try:

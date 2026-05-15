@@ -170,3 +170,35 @@ def test_tags_stored_as_comma_string(tmp_path):
     if not non_empty.empty:
         sample = non_empty.iloc[0]
         assert isinstance(sample, str)
+
+
+class _PartialFailProvider(MockProvider):
+    """Returns None for every 3rd embedding to simulate failures."""
+    def embed_texts(self, texts):
+        vectors = super().embed_texts(texts)
+        return [None if i % 3 == 2 else v for i, v in enumerate(vectors)]
+
+
+def test_incremental_chunks_created_counts_successful_only(tmp_path):
+    """chunks_created should reflect records actually added, not chunks produced."""
+    import shutil
+    vault = tmp_path / "vault"
+    shutil.copytree(str(FIXTURES), str(vault),
+                    ignore=shutil.ignore_patterns(".git", ".trash", ".obsidian"))
+
+    db_path = str(tmp_path / "db.lance")
+    full_index(str(vault), db_path, MockProvider())
+
+    big = "---\ntitle: Big\n---\n\n# H\n\n" + "\n\n".join(
+        f"Paragraph {i}. " + "x" * 800 for i in range(10)
+    )
+    (vault / "big-note.md").write_text(big, encoding="utf-8")
+
+    result = incremental_index(str(vault), db_path, _PartialFailProvider(),
+                               single_file="big-note.md")
+
+    db = _get_db(db_path)
+    table = _get_table(db)
+    df = table.to_pandas()
+    actual_big_chunks = len(df[df["file_path"] == "big-note.md"])
+    assert result["chunks_created"] == actual_big_chunks

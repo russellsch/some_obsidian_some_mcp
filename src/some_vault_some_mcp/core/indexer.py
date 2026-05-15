@@ -266,6 +266,7 @@ def incremental_index(
                 chunk["file_mtime"] = mtime
             new_chunks.extend(chunks)
 
+        records: list[dict] = []
         if new_chunks:
             texts = [c["text_to_embed"] for c in new_chunks]
             all_vectors: list[list[float] | None] = []
@@ -280,7 +281,7 @@ def incremental_index(
         duration = time.time() - start
         return {
             "files_indexed": len(to_reindex),
-            "chunks_created": len(new_chunks),
+            "chunks_created": len(records),
             "files_removed": len(deleted),
             "duration_seconds": round(duration, 2),
         }

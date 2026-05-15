@@ -1,5 +1,6 @@
 """FastMCP server: tool registration with override support + MCP resources."""
 
+import datetime
 import json
 import logging
 import os
@@ -56,6 +57,12 @@ def _check_index_gate(gate: "IndexGate | None", tool_name: str) -> str | None:
         f"get_backlinks, get_outlinks, and all write/canvas tools.\n"
         f"Call vault_index_status to check progress."
     )
+
+
+def _json_default(obj):
+    if isinstance(obj, (datetime.date, datetime.datetime)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def build_server(config: VaultMcpConfig, provider: EmbeddingProvider, gate: IndexGate | None = None) -> FastMCP:
@@ -152,7 +159,7 @@ def build_server(config: VaultMcpConfig, provider: EmbeddingProvider, gate: Inde
         if note.frontmatter:
             header.append("--- Frontmatter ---")
             for k, v in note.frontmatter.items():
-                header.append(f"{k}: {json.dumps(v)}")
+                header.append(f"{k}: {json.dumps(v, default=_json_default)}")
             header.append("--- End Frontmatter ---")
             header.append("")
         if note.tags:
@@ -312,7 +319,7 @@ def build_server(config: VaultMcpConfig, provider: EmbeddingProvider, gate: Inde
         if result["frontmatter"]:
             lines.append("--- Frontmatter ---")
             for k, v in result["frontmatter"].items():
-                lines.append(f"{k}: {json.dumps(v)}")
+                lines.append(f"{k}: {json.dumps(v, default=_json_default)}")
             lines.append("--- End Frontmatter ---")
             lines.append("")
         lines.append(result["content"])

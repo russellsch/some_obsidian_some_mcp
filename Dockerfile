@@ -7,7 +7,7 @@ RUN groupadd -g 1000 vault && useradd -u 1000 -g vault -m -s /bin/bash vault
 WORKDIR /app
 
 # Deps layer (cached until pyproject.toml or uv.lock change)
-COPY pyproject.toml uv.lock /app/
+COPY pyproject.toml uv.lock README.md /app/
 RUN mkdir -p src/some_vault_some_mcp && touch src/some_vault_some_mcp/__init__.py \
     && uv sync --frozen --no-dev --no-editable
 

@@ -5,7 +5,6 @@ __pycache__
 tests/
 CLAUDE.md
 CLAUDE/
-README.md
 *.pyc
 .venv
 .env
